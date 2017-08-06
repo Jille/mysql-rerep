@@ -14,11 +14,12 @@ root@slave# php rerep.php slave 10.0.0.2 /var/lib/mysql 0
 
 `/var/lib/mysql` should be the mysql data directory.
 
-`0` can set to a higher number to have your slave [deliberately lag behind](https://dev.mysql.com/doc/refman/5.7/en/replication-delayed.html).
+`0` should be a higher number to have your slave [deliberately lag behind](https://dev.mysql.com/doc/refman/5.7/en/replication-delayed.html).
 
 ## Assumptions
 
 * We can connect as root via localhost to both servers with the same password.
+* You already have mysql running on both servers.
 * Some (write) downtime is acceptable as we hold a read-lock while copying data.
 * You can rsync from the master to the slave as root (I recommend using pubkey authentication).
 * `service mysql start|stop` starts/stops your MySQLd.
