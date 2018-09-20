@@ -14,17 +14,95 @@
 
 	qassert(getmyuid() == 0, 'must run as root');
 
-	$mode = $_SERVER['argv'][1];
+	$flags = [
+		// name => [master=true/slave=false, hasValue, cast callback]
+		'slave-is-down' => [false, false, NULL],
+		'slave-delay' => [false, true, 'intval'],
+		'use-tmpdir' => [true, false, NULL],
+		'reuse-tmpdir' => [true, true, 'strval'],
+	];
+
+	function parse_flags() {
+		global $flags;
+		$longopts = [];
+		foreach($flags as $name => list(, $hasValue)) {
+			$fn = $name;
+			if($hasValue) {
+				$fn .= ':';
+			}
+			array_push($longopts, $fn);
+		}
+
+		// I had to implement my own getopt because PHP's getopt() only has $optind from 7.1. It sucks. Don't reuse it.
+		$args = [$_SERVER['argv'][0]];
+		$parsed = [];
+		$unprocessed = array_slice($_SERVER['argv'], 1);
+		while($unprocessed) {
+			$arg = array_shift($unprocessed);
+			if(!$arg || substr($arg, 0, 2) != '--') {
+				array_unshift($unprocessed, $arg);
+				break;
+			}
+			$ex = explode('=', substr($arg, 2), 2);
+			$k = $ex[0];
+			qassert(isset($flags[$k]), 'Flag '. $k .' does not exist');
+			if(count($ex) == 2) {
+				$v = $ex[1];
+				qassert($flags[$k][1], 'Flag '. $k .' takes no value');
+			} else {
+				if($flags[$k][1]) {
+					$v = array_shift($unprocessed);
+				} else {
+					$v = true;
+				}
+			}
+			$parsed[$k] = $v;
+		}
+		$args = array_merge($args, $unprocessed);
+
+		$opts = [];
+		$per_type = [true => [], false => []];
+		foreach($flags as $name => list($type, $hasValue, $caster)) {
+			if(isset($parsed[$name])) {
+				$opts[$name] = $hasValue ? $caster($parsed[$name]) : true;
+				array_push($per_type[$type], $name);
+			} else {
+				$opts[$name] = false;
+			}
+		}
+
+		return [$opts, $args, $per_type[true], $per_type[false]];
+	}
+
+	function merge_opts($master, $slave) {
+		global $flags;
+		$ret = [];
+		foreach($flags as $name => list($type)) {
+			if($type) {
+				$ret[$name] = $master[$name];
+			} else {
+				$ret[$name] = $slave[$name];
+			}
+		}
+		return $ret;
+	}
+
+	list($opts, $args, $masterFlags, $slaveFlags) = parse_flags();
+
+	$mode = $args[1];
 	switch($mode) {
 		case 'master':
+			qassert(count($args) == 3, 'Usage: php rerep.php [--flags] master <datadir>');
 			$master = true;
-			$datadir = $_SERVER['argv'][2];
+			$datadir = $args[2];
+			qassert(count($slaveFlags) == 0, implode(', ', $slaveFlags) .' can only be set on the slave side');
 			break;
 		case 'slave':
+			qassert(count($args) == 4, 'Usage: php rerep.php [--flags] slave <master-host> <datadir> <delay>');
 			$master = false;
-			$masterhost = $_SERVER['argv'][2];
-			$datadir = $_SERVER['argv'][3];
-			$delay = intval($_SERVER['argv'][4]);
+			$masterhost = $args[2];
+			$datadir = $args[3];
+			qassert(count($masterFlags) == 0, implode(', ', $masterFlags) .' can only be set on the master side');
 			break;
 		default:
 			qassert(false, 'mode must be master or slave');
@@ -35,6 +113,14 @@
 	qassert(is_dir($datadir .'/mysql'), 'datadir doesn\'t look like a mysql datadir');
 	qassert(is_file($datadir .'/mysql/user.frm'), 'datadir doesn\'t look like a mysql datadir');
 
+	if($opts['reuse-tmpdir']) {
+		$tmpdir = $opts['reuse-tmpdir'];
+	} elseif($opts['use-tmpdir']) {
+		$tmpdir = '/tmp/rerep-'. getmypid();
+	} else {
+		$tmpdir = NULL;
+	}
+
 	if($master) {
 		$lsock = socket_create_listen(4336);
 		echo "Waiting for rerep slave to connect...";
@@ -42,13 +128,21 @@
 		$sock = socket_accept($lsock);
 		echo "\n";
 		socket_close($lsock);
-		qassert(fetch_line() == 'MySQL rereplicator v1.1', 'version mismatch');
+		qassert(fetch_line() == 'MySQL rereplicator v2.0', 'version mismatch');
 		send_line(md5_file(__FILE__));
+
+		send_line(base64_encode(json_encode($opts)));
+		$remoteOpts = json_decode(base64_decode(fetch_line()), true);
+		$opts = merge_opts($opts, $remoteOpts);
 	} else {
 		$sock = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
 		socket_connect($sock, $masterhost, 4336);
-		send_line('MySQL rereplicator v1.1');
+		send_line('MySQL rereplicator v2.0');
 		qassert(fetch_line() == md5_file(__FILE__), 'strict version mismatch');
+
+		$remoteOpts = json_decode(base64_decode(fetch_line()), true);
+		send_line(base64_encode(json_encode($opts)));
+		$opts = merge_opts($remoteOpts, $opts);
 	}
 
 	$peer = 'unknown';
@@ -68,33 +162,57 @@
 		socket_write($sock, $line ."\n");
 	}
 
-	// [run on true=master/false=slave, callback, result variable, extra args...]
-	$stages = [
-		[true, "ask_rootpass", 'root_password'],
-		[true, "verify_mysql_connect", ''],
-		[false, "verify_mysql_connect", ''],
-		[false, "generate_username", 'repl_username'],
-		[false, "generate_password", 'repl_password'],
-		[false, "exchange_datadir", 'slave_datadir'],
-		[false, "ask_confirmation", ''],
-		[true, "ask_confirmation", ''],
-		[false, "reset_slave", ''],
-		[false, "startstop_mysqld", '', false],
-		[true, "rsync", ''],
-		[true, "ask_confirmation", ''],
-		[true, "rsync", ''],
-		[true, "lock_tables", ''],
-		[true, "get_master_pos", 'master_info'],
-		[true, "rsync", ''],
-		[true, "unlock_tables", ''],
-		[true, "ask_confirmation", ''],
-		[true, "create_repl_user", ''],
-		[true, "get_master_pos", 'master_info2'],
-		[false, "startstop_mysqld", '', true],
-		[false, "configure_slave", ''],
-		[false, "wait_for_catch_up", ''],
-		[false, "configure_slave_delay", ''],
-	];
+	function get_stages($opts) {
+		// [run on true=master/false=slave, callback, result variable, extra args...]
+		$stages = [];
+		array_push($stages, [true, "ask_rootpass", 'root_password']);
+		array_push($stages, [true, "verify_mysql_connect", '']);
+		if(!$opts['slave-is-down']) {
+			array_push($stages, [false, "verify_mysql_connect", '']);
+		}
+		array_push($stages, [false, "generate_username", 'repl_username']);
+		array_push($stages, [false, "generate_password", 'repl_password']);
+		array_push($stages, [false, "exchange_datadir", 'slave_datadir']);
+		array_push($stages, [false, "ask_confirmation", '']);
+		array_push($stages, [true, "ask_confirmation", '']);
+		if(!$opts['slave-is-down']) {
+			array_push($stages, [false, "reset_slave", '', true]);
+			array_push($stages, [false, "startstop_mysqld", '', false]);
+		} else {
+			array_push($stages, [false, "reset_slave", '', false]);
+		}
+		if(!$opts['reuse-tmpdir']) {
+			$rsyncTarget = $opts['use-tmpdir'] ? 'tmp' : 'remote';
+			array_push($stages, [true, "rsync", '', 'local', $rsyncTarget]);
+			array_push($stages, [true, "ask_confirmation", '']);
+			array_push($stages, [true, "rsync", '', 'local', $rsyncTarget]);
+			array_push($stages, [true, "lock_tables", '']);
+			array_push($stages, [true, "get_master_pos", 'master_info']);
+			array_push($stages, [true, "rsync", '', 'local', $rsyncTarget]);
+			array_push($stages, [true, "unlock_tables", '']);
+			if($opts['use-tmpdir']) {
+				array_push($stages, [true, "store_master_info", '']);
+			}
+			array_push($stages, [true, "ask_confirmation", '']);
+		} else {
+			array_push($stages, [true, "load_master_info", 'master_info']);
+		}
+		array_push($stages, [true, "create_repl_user", '']);
+		array_push($stages, [true, "get_master_pos", 'master_info2']);
+		if($opts['use-tmpdir'] || $opts['reuse-tmpdir']) {
+			array_push($stages, [true, "rsync", '', 'tmp', 'remote']);
+		}
+		array_push($stages, [false, "startstop_mysqld", '', true]);
+		array_push($stages, [false, "configure_slave", '']);
+		array_push($stages, [false, "wait_for_catch_up", '']);
+		if($opts['slave-delay']) {
+			array_push($stages, [false, "configure_slave_delay", '', $opts['slave-delay']]);
+		}
+
+		return $stages;
+	}
+
+	$stages = get_stages($opts);
 
 	$stage_output = [];
 	foreach($stages as $i => $stage) {
@@ -123,6 +241,10 @@
 	}
 	socket_close($sock);
 	echo "Done!\n";
+
+	if($tmpdir) {
+		echo "Don't forget to remove the tempdir manually: ". $tmpdir ."\n";
+	}
 
 	function ask_rootpass() {
 		echo "Please enter your MySQL root password. Note it will show up in plain text in both terminals.\n";
@@ -166,11 +288,19 @@
 		return $ret;
 	}
 
-	function reset_slave() {
-		$m = open_mysql();
-		do_query($m, 'STOP SLAVE');
-		do_query($m, 'RESET SLAVE');
-		$m->close();
+	function reset_slave($running) {
+		global $datadir;
+		if($running) {
+			$m = open_mysql();
+			do_query($m, 'STOP SLAVE');
+			do_query($m, 'RESET SLAVE');
+			$m->close();
+		} else {
+			$fn = $datadir .'/master.info';
+			if(is_file($fn)) {
+				unlink($datadir .'/master.info');
+			}
+		}
 	}
 
 	function startstop_mysqld($on) {
@@ -179,11 +309,18 @@
 		qassert($ret == 0, "exit code $ret");
 	}
 
-	function rsync() {
-		global $peer, $stage_output, $datadir;
-		$localdir = $datadir;
-		$remotedir = $stage_output['slave_datadir'];
-		$exclude = ['relay-log.info', 'master.info', 'auto.cnf'];
+	function rsync($from, $to) {
+		global $peer, $stage_output, $datadir, $tmpdir;
+		$lookup = [
+			'tmp' => $tmpdir,
+			'local' => $datadir,
+			'remote' => 'root@'. $peer .':'. $stage_output['slave_datadir'],
+		];
+		$localdir = $lookup[$from];
+		$remotedir = $lookup[$to];
+		qassert($localdir, '$localdir is unset?');
+		qassert($remotedir, '$remotedir is unset?');
+		$exclude = ['relay-log.info', 'master.info', 'auto.cnf', 'rerep.info'];
 		foreach(glob($localdir .'/*.index') as $idx) {
 			$logname = basename($idx, '.index');
 			$logs = glob($localdir .'/'. $logname .'.[0-9]*');
@@ -197,7 +334,7 @@
 		foreach($exclude as $fn) {
 			$cmd .= ' --exclude='. $fn;
 		}
-		$cmd .= ' '. $localdir .'/ root@'. $peer .':'. $remotedir .'/';
+		$cmd .= ' '. $localdir .'/ '. $remotedir .'/';
 		passthru($cmd, $ret);
 		qassert($ret == 0, "exit code $ret");
 	}
@@ -220,6 +357,16 @@
 		global $locked_m;
 		do_query($locked_m, 'UNLOCK TABLES');
 		$locked_m->close();
+	}
+
+	function store_master_info() {
+		global $stage_output, $tmpdir;
+		file_put_contents($tmpdir .'/rerep.info', $stage_output['master_info'] ."\n");
+	}
+
+	function load_master_info() {
+		global $tmpdir;
+		return trim(file_get_contents($tmpdir .'/rerep.info'));
 	}
 
 	function create_repl_user() {
@@ -257,8 +404,7 @@
 		$m->close();
 	}
 
-	function configure_slave_delay() {
-		global $delay;
+	function configure_slave_delay($delay) {
 		$m = open_mysql();
 		do_query($m, "STOP SLAVE");
 		do_query($m, "CHANGE MASTER TO MASTER_DELAY=". $delay);

@@ -7,14 +7,24 @@ This is a simple script that allows you to set up MySQL replication. It's called
 ```
 root@master# php rerep.php master /var/lib/mysql
 
-root@slave# php rerep.php slave 10.0.0.2 /var/lib/mysql 0
+root@slave# php rerep.php slave 10.0.0.2 /var/lib/mysql
 ```
 
 `10.0.0.2` should be replaced by the hostname or IP of the master.
 
 `/var/lib/mysql` should be the mysql data directory.
 
-`0` should be a higher number to have your slave [deliberately lag behind](https://dev.mysql.com/doc/refman/5.7/en/replication-delayed.html).
+Optional flags for the master side are:
+
+`--use-tmpdir` lets rerep first sync to a tmpdir. This is useful if rsyncing to the slave is slow and you want to minimize impact to your master.
+
+`--reuse-tmpdir=/tmp/rerep-123` lets rerep reuse a tmpdir previously left behind. This can be used to seed multiple slaves from the same tmpdir.
+
+Optional flags for the slave side are:
+
+`--delay=3600` should be set to have your slave [deliberately lag behind](https://dev.mysql.com/doc/refman/5.7/en/replication-delayed.html).
+
+`--slave-is-down` should be set if the MySQL slave is currently not running. Please don't lie as you'll get data corruption on your slave. Ask me how I know.
 
 ## Assumptions
 
