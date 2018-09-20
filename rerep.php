@@ -20,6 +20,7 @@
 		'slave-delay' => [false, true, 'intval'],
 		'use-tmpdir' => [true, false, NULL],
 		'reuse-tmpdir' => [true, true, 'strval'],
+		'noconfirm' => [false, false, NULL],
 	];
 
 	function parse_flags() {
@@ -128,7 +129,7 @@
 		$sock = socket_accept($lsock);
 		echo "\n";
 		socket_close($lsock);
-		qassert(fetch_line() == 'MySQL rereplicator v2.0', 'version mismatch');
+		qassert(fetch_line() == 'MySQL rereplicator v2.1', 'version mismatch');
 		send_line(md5_file(__FILE__));
 
 		send_line(base64_encode(json_encode($opts)));
@@ -137,7 +138,7 @@
 	} else {
 		$sock = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
 		socket_connect($sock, $masterhost, 4336);
-		send_line('MySQL rereplicator v2.0');
+		send_line('MySQL rereplicator v2.1');
 		qassert(fetch_line() == md5_file(__FILE__), 'strict version mismatch');
 
 		$remoteOpts = json_decode(base64_decode(fetch_line()), true);
@@ -173,8 +174,10 @@
 		array_push($stages, [false, "generate_username", 'repl_username']);
 		array_push($stages, [false, "generate_password", 'repl_password']);
 		array_push($stages, [false, "exchange_datadir", 'slave_datadir']);
-		array_push($stages, [false, "ask_confirmation", '']);
-		array_push($stages, [true, "ask_confirmation", '']);
+		if(!$opts['noconfirm']) {
+			array_push($stages, [false, "ask_confirmation", '']);
+			array_push($stages, [true, "ask_confirmation", '']);
+		}
 		if(!$opts['slave-is-down']) {
 			array_push($stages, [false, "reset_slave", '', true]);
 			array_push($stages, [false, "startstop_mysqld", '', false]);
@@ -184,7 +187,9 @@
 		if(!$opts['reuse-tmpdir']) {
 			$rsyncTarget = $opts['use-tmpdir'] ? 'tmp' : 'remote';
 			array_push($stages, [true, "rsync", '', 'local', $rsyncTarget]);
-			array_push($stages, [true, "ask_confirmation", '']);
+			if(!$opts['noconfirm']) {
+				array_push($stages, [true, "ask_confirmation", '']);
+			}
 			array_push($stages, [true, "rsync", '', 'local', $rsyncTarget]);
 			array_push($stages, [true, "lock_tables", '']);
 			array_push($stages, [true, "get_master_pos", 'master_info']);
@@ -193,7 +198,9 @@
 			if($opts['use-tmpdir']) {
 				array_push($stages, [true, "store_master_info", '']);
 			}
-			array_push($stages, [true, "ask_confirmation", '']);
+			if(!$opts['noconfirm']) {
+				array_push($stages, [true, "ask_confirmation", '']);
+			}
 		} else {
 			array_push($stages, [true, "load_master_info", 'master_info']);
 		}

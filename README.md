@@ -26,6 +26,8 @@ Optional flags for the slave side are:
 
 `--slave-is-down` should be set if the MySQL slave is currently not running. Please don't lie as you'll get data corruption on your slave. Ask me how I know.
 
+`--noconfirm` skips all confirmations for automated usage.
+
 ## Assumptions
 
 * We can connect as root via localhost to both servers with the same password.
