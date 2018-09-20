@@ -14,13 +14,13 @@ root@slave# php rerep.php slave 10.0.0.2 /var/lib/mysql
 
 `/var/lib/mysql` should be the mysql data directory.
 
-Optional flags for the master side are:
+### Optional flags for the master side are:
 
 `--use-tmpdir` lets rerep first sync to a tmpdir. This is useful if rsyncing to the slave is slow and you want to minimize impact to your master.
 
 `--reuse-tmpdir=/tmp/rerep-123` lets rerep reuse a tmpdir previously left behind. This can be used to seed multiple slaves from the same tmpdir.
 
-Optional flags for the slave side are:
+### Optional flags for the slave side are:
 
 `--delay=3600` should be set to have your slave [deliberately lag behind](https://dev.mysql.com/doc/refman/5.7/en/replication-delayed.html).
 
