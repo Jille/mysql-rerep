@@ -130,7 +130,7 @@
 		$sock = socket_accept($lsock);
 		echo "\n";
 		socket_close($lsock);
-		qassert(fetch_line() == 'MySQL rereplicator v2.1', 'version mismatch');
+		qassert(fetch_line() == 'MySQL rereplicator v2.2', 'version mismatch');
 		send_line(md5_file(__FILE__));
 
 		send_line(base64_encode(json_encode($opts)));
@@ -139,7 +139,7 @@
 	} else {
 		$sock = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
 		socket_connect($sock, $masterhost, 4336);
-		send_line('MySQL rereplicator v2.1');
+		send_line('MySQL rereplicator v2.2');
 		qassert(fetch_line() == md5_file(__FILE__), 'strict version mismatch');
 
 		$remoteOpts = json_decode(base64_decode(fetch_line()), true);
@@ -167,6 +167,11 @@
 	function get_stages($opts) {
 		// [run on true=master/false=slave, callback, result variable, extra args...]
 		$stages = [];
+		array_push($stages, [true, "get_datadir_size", 'datadir_size']);
+		array_push($stages, [false, "verify_free_space", '', 'slave']);
+		if($opts['use-tmpdir']) {
+			array_push($stages, [true, "verify_free_space", '', 'tmp']);
+		}
 		array_push($stages, [true, "ask_rootpass", 'root_password', $opts['password']]);
 		array_push($stages, [true, "verify_mysql_connect", '']);
 		if(!$opts['slave-is-down']) {
@@ -253,6 +258,34 @@
 
 	if($tmpdir) {
 		echo "Don't forget to remove the tempdir manually: ". $tmpdir ."\n";
+	}
+
+	function directory_size($dir) {
+		return intval(shell_exec('du -sk '. escapeshellarg($dir)));
+	}
+
+	function get_datadir_size() {
+		global $datadir;
+		return directory_size($datadir);
+	}
+
+	function verify_free_space($location) {
+		global $datadir, $tmpdir, $stage_output;
+		if($location == 'tmp') {
+			$dir = $tmpdir;
+		} else {
+			$dir = $datadir;
+		}
+		if(is_dir($dir)) {
+			$current = directory_size($dir);
+			$free = disk_free_space($dir) / 1024;
+		} else {
+			$current = 0;
+			$free = disk_free_space(dirname($dir)) / 1024;
+		}
+		$needed = $stage_output['datadir_size'];
+		$remaining = $free + $current - $needed;
+		qassert($remaining > 1024*1024, 'Less than 1GiB space would remain free after copying to '. $location);
 	}
 
 	function ask_rootpass($flag) {
