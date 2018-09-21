@@ -211,6 +211,7 @@
 			array_push($stages, [true, "rsync", '', 'tmp', 'remote']);
 		}
 		array_push($stages, [false, "startstop_mysqld", '', true]);
+		array_push($stages, [false, "wait_for_mysql_startup", '']);
 		array_push($stages, [false, "configure_slave", '']);
 		array_push($stages, [false, "wait_for_catch_up", '']);
 		if($opts['slave-delay']) {
@@ -388,6 +389,18 @@
 		do_query($m, "CREATE USER ". $user ." IDENTIFIED BY '". $stage_output['repl_password'] ."'");
 		do_query($m, "GRANT REPLICATION SLAVE ON *.* TO ". $user);
 		$m->close();
+	}
+
+	function wait_for_mysql_startup() {
+		for($i = 0; 60 > $i; $i++) {
+			try {
+				open_mysql()->close();
+				return;
+			} catch(Exception $e) {
+			}
+			sleep(5);
+		}
+		throw $e;
 	}
 
 	function configure_slave() {
