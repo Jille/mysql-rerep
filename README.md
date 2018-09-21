@@ -28,6 +28,8 @@ root@slave# php rerep.php slave 10.0.0.2 /var/lib/mysql
 
 `--noconfirm` skips all confirmations for automated usage.
 
+`--password=root` sets the root password to connect to master and slave rather than asking interactively.
+
 ## Assumptions
 
 * We can connect as root via localhost to both servers with the same password.

@@ -21,6 +21,7 @@
 		'use-tmpdir' => [true, false, NULL],
 		'reuse-tmpdir' => [true, true, 'strval'],
 		'noconfirm' => [false, false, NULL],
+		'password' => [false, true, 'strval'],
 	];
 
 	function parse_flags() {
@@ -166,7 +167,7 @@
 	function get_stages($opts) {
 		// [run on true=master/false=slave, callback, result variable, extra args...]
 		$stages = [];
-		array_push($stages, [true, "ask_rootpass", 'root_password']);
+		array_push($stages, [true, "ask_rootpass", 'root_password', $opts['password']]);
 		array_push($stages, [true, "verify_mysql_connect", '']);
 		if(!$opts['slave-is-down']) {
 			array_push($stages, [false, "verify_mysql_connect", '']);
@@ -253,7 +254,10 @@
 		echo "Don't forget to remove the tempdir manually: ". $tmpdir ."\n";
 	}
 
-	function ask_rootpass() {
+	function ask_rootpass($flag) {
+		if($flag) {
+			return $flag;
+		}
 		echo "Please enter your MySQL root password. Note it will show up in plain text in both terminals.\n";
 		echo "Password: ";
 		flush();
