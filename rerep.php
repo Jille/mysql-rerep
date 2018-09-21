@@ -454,10 +454,9 @@
 		global $stage_output;
 		$m = open_mysql();
 		list($log, $pos) = explode(' ', $stage_output['master_info2']);
-		$res = do_query($m, 'SELECT MASTER_POS_WAIT("'. $log .'", '. $pos .', 300)');
+		$res = do_query($m, 'SELECT MASTER_POS_WAIT("'. $log .'", '. $pos .')');
 		$masterWait = $res->fetch_row();
 		qassert($masterWait[0] !== NULL, 'replication has failed');
-		qassert($masterWait[0] >= 0, 'replication didn\'t catch up within five minutes');
 		$m->close();
 	}
 
